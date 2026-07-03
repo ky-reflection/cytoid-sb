@@ -1,0 +1,39 @@
+[workspace]
+members = [
+    "crates/cytoid-sb-model",
+    "crates/cytoid-sb-builder",
+    "crates/cytoid-sb-lower",
+    "crates/cytoid-sb-validate",
+    "crates/cytoid-sb-emit",
+    "crates/cytoid-sb-diag",
+    "crates/cytoid-sb-lua",
+    "crates/cytoid-sb-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Cytoid Contributors"]
+repository = "https://github.com/Cytoid/cytoid-sb"
+
+[workspace.dependencies]
+camino = "1"
+clap = { version = "4.5", features = ["derive"] }
+miette = { version = "7", features = ["fancy"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+json5 = "0.4"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+mlua = { version = "0.11", features = ["lua54", "vendored", "serde"] }
+
+cytoid-sb-builder = { path = "crates/cytoid-sb-builder" }
+cytoid-sb-diag = { path = "crates/cytoid-sb-diag" }
+cytoid-sb-emit = { path = "crates/cytoid-sb-emit" }
+cytoid-sb-lower = { path = "crates/cytoid-sb-lower" }
+cytoid-sb-lua = { path = "crates/cytoid-sb-lua" }
+cytoid-sb-model = { path = "crates/cytoid-sb-model" }
+cytoid-sb-validate = { path = "crates/cytoid-sb-validate" }

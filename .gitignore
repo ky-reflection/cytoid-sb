@@ -1,0 +1,13 @@
+/target/
+**/*.rs.bk
+Cargo.lock
+.DS_Store
+*.log
+.idea/
+.vscode/
+*.generated.json
+
+# Local Lab level fixtures (~200 MB, sync via tool/sync-lab-levels.ps1)
+examples/levels/*/
+!examples/levels/README.md
+!examples/levels/.gitkeep

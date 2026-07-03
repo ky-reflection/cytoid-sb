@@ -1,0 +1,12 @@
+{
+  "sprites": [
+    {
+      "Id": "hello_glow",
+      "Path": "hello_glow.png",
+      "States": [
+        { "Time": 0.0, "Opacity": 0.0, "Scale": 0.8 },
+        { "Time": 1.0, "Opacity": 1.0, "Scale": 1.0, "Easing": "OutQuint" }
+      ]
+    }
+  ]
+}
