@@ -7,10 +7,15 @@ use cytoid_sb_builder::{
 };
 use cytoid_sb_diag::{SbError, SbResult};
 use cytoid_sb_model::StoryboardDocument;
-use mlua::{Function, Lua, LuaOptions, LuaSerdeExt, StdLib, Table, Value};
-use serde_json::{Map, Value as JsonValue};
+use mlua::{Function, Lua, LuaOptions, LuaSerdeExt, StdLib, Table, UserData, Value};
+use serde_json::{json, Map, Value as JsonValue};
 use std::fs;
 use std::sync::{Arc, Mutex};
+
+#[derive(Clone, Copy)]
+struct NullMarker;
+
+impl UserData for NullMarker {}
 
 pub fn compile_file(path: &Utf8Path) -> SbResult<StoryboardDocument> {
     let source = fs::read_to_string(path.as_std_path()).map_err(|source| SbError::Io {
@@ -170,6 +175,13 @@ fn register_sb_api(
         "controller",
         lua.create_function(move |lua, spec: Table| -> mlua::Result<Value> {
             let map = table_to_authoring_map(lua, Value::Table(spec))?;
+            if map.contains_key("states") || map.contains_key("States") {
+                builder_for_controller
+                    .lock()
+                    .map_err(|_| mlua::Error::runtime("sb builder lock poisoned"))?
+                    .create_controller_from_spec(map);
+                return Ok(Value::Nil);
+            }
             let controller_id = controller_handle_id(&map);
             if map.is_empty() || controller_id.is_some() {
                 let handle = builder_for_controller
@@ -215,6 +227,21 @@ fn register_sb_api(
         })?,
     )?;
 
+    let builder_for_template = builder.clone();
+    sb.set(
+        "template",
+        lua.create_function(move |lua, (name, spec): (String, Table)| {
+            let map = table_to_authoring_map(lua, Value::Table(spec))?;
+            builder_for_template
+                .lock()
+                .map_err(|_| mlua::Error::runtime("sb builder lock poisoned"))?
+                .set_template(name, map);
+            Ok(())
+        })?,
+    )?;
+
+    sb.set("null", Value::UserData(lua.create_userdata(NullMarker)?))?;
+
     env.set("sb", sb)?;
     Ok(())
 }
@@ -223,14 +250,66 @@ pub(crate) fn table_to_authoring_map(
     lua: &Lua,
     value: Value,
 ) -> mlua::Result<Map<String, JsonValue>> {
-    let value: JsonValue = lua.from_value(value)?;
     match value {
-        JsonValue::Object(map) => Ok(lua_table_to_authoring_map(map)),
+        Value::Table(table) => {
+            let map = match lua_value_to_json(lua, Value::Table(table))? {
+                JsonValue::Object(map) => map,
+                _ => {
+                    return Err(mlua::Error::FromLuaConversionError {
+                        from: "table",
+                        to: "object".into(),
+                        message: Some("expected object/table".into()),
+                    });
+                }
+            };
+            Ok(lua_table_to_authoring_map(map))
+        }
         _ => Err(mlua::Error::FromLuaConversionError {
             from: "table",
             to: "object".into(),
             message: Some("expected object/table".into()),
         }),
+    }
+}
+
+fn lua_key_to_string(key: Value) -> mlua::Result<String> {
+    match key {
+        Value::String(s) => Ok(s.to_str()?.to_string()),
+        Value::Integer(i) => Ok(i.to_string()),
+        Value::Number(n) => Ok(n.to_string()),
+        _ => Err(mlua::Error::runtime("table key must be string or number")),
+    }
+}
+
+fn lua_table_to_json_map(lua: &Lua, table: Table) -> mlua::Result<Map<String, JsonValue>> {
+    let mut map = Map::new();
+    for pair in table.pairs::<Value, Value>() {
+        let (key, value) = pair?;
+        map.insert(lua_key_to_string(key)?, lua_value_to_json(lua, value)?);
+    }
+    Ok(map)
+}
+
+fn lua_value_to_json(lua: &Lua, value: Value) -> mlua::Result<JsonValue> {
+    match value {
+        Value::Nil => Ok(JsonValue::Null),
+        Value::UserData(ud) if ud.is::<NullMarker>() => Ok(JsonValue::Null),
+        Value::Boolean(b) => Ok(JsonValue::Bool(b)),
+        Value::Integer(i) => Ok(json!(i)),
+        Value::Number(n) => Ok(json!(n)),
+        Value::String(s) => Ok(JsonValue::String(s.to_str()?.to_string())),
+        Value::Table(table) => {
+            let seq: Vec<JsonValue> = table
+                .sequence_values::<Value>()
+                .map(|value| lua_value_to_json(lua, value?))
+                .collect::<mlua::Result<_>>()?;
+            if !seq.is_empty() {
+                Ok(JsonValue::Array(seq))
+            } else {
+                Ok(JsonValue::Object(lua_table_to_json_map(lua, table)?))
+            }
+        }
+        other => lua.from_value(other),
     }
 }
 
@@ -379,6 +458,21 @@ sb.trigger { type = "NoteClear", notes = { 1 }, spawn = { "title" } }
     fn sandbox_blocks_load() {
         let err = compile_source("evil.lua", "load('bad')").unwrap_err();
         assert!(err.to_string().contains("not available in sandbox"));
+    }
+
+    #[test]
+    fn preserves_null_fields_from_lua() {
+        let source = r#"
+sb.controller {
+  states = {
+    { scanline_color = sb.null, time = 1.0 },
+  },
+}
+"#;
+        let doc = compile_source("null.lua", source).unwrap();
+        let state = doc.controllers[0]["states"][0].as_object().unwrap();
+        assert!(state.contains_key("scanline_color"));
+        assert!(state["scanline_color"].is_null());
     }
 
     #[test]

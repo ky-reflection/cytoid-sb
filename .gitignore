@@ -6,6 +6,12 @@ Cargo.lock
 .idea/
 .vscode/
 *.generated.json
+__pycache__/
+*.pyc
+
+# Maintainer-private chart work (local only; never commit)
+examples/private/*
+!examples/private/README.md
 
 # Local Lab level fixtures (~200 MB, sync via tool/sync-lab-levels.ps1)
 examples/levels/*/

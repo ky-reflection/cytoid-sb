@@ -36,7 +36,6 @@ Last batch run (2026-07-03): **12 passed**, 0 failed, 2 dirs skipped (no storybo
 | `timitini.bpm_rt_` | `storyboard.json` | |
 | `timitini.ccc4th.energy_synergy_matrix_` | `storyboard.json` | Larger SB |
 | `timitini.you_are_the_miserable_` | `storyboard_ex.json`, `storyboard_hd.json` | Dual SB |
-| `yma.lin_ne_kro_ne` | `Storyboard.json` | Includes video refs |
 | `cht.once_forgotten` | `Storyboard.json` | Largest (~85 MB) |
 
 Each folder is an extracted level package (chart JSON, assets, storyboard JSON).

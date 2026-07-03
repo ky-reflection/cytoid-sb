@@ -12,20 +12,43 @@ def lua_string(s: str) -> str:
     return json.dumps(s, ensure_ascii=False)
 
 
-def fmt_inline_table(obj: dict) -> str:
-    parts = []
-    for key, value in obj.items():
-        if key in ("states", "States"):
-            continue
-        parts.append(f"{key} = {lua_value(value)}")
-    return "{ " + ", ".join(parts) + " }"
+LUA_RESERVED = {
+    "and",
+    "break",
+    "do",
+    "else",
+    "elseif",
+    "end",
+    "false",
+    "for",
+    "function",
+    "goto",
+    "if",
+    "in",
+    "local",
+    "nil",
+    "not",
+    "or",
+    "repeat",
+    "return",
+    "then",
+    "true",
+    "until",
+    "while",
+}
+
+
+def lua_key(key: str) -> str:
+    if key in LUA_RESERVED:
+        return f"[{lua_string(key)}]"
+    return key
 
 
 def lua_value(value):
     if isinstance(value, bool):
         return "true" if value else "false"
     if value is None:
-        return "nil"
+        return "sb.null"
     if isinstance(value, (int, float)):
         return repr(value)
     if isinstance(value, str):
@@ -37,17 +60,38 @@ def lua_value(value):
         inner = ", ".join(lua_value(x) for x in value)
         return "{ " + inner + " }"
     if isinstance(value, dict):
-        return fmt_inline_table(value)
+        return emit_lua_table(value)
     return lua_string(str(value))
+
+
+def emit_lua_table(obj: dict) -> str:
+    parts = []
+    for key, value in obj.items():
+        parts.append(f"{lua_key(key)} = {lua_value(value)}")
+    return "{ " + ", ".join(parts) + " }"
+
+
+def load_doc(path: Path) -> dict:
+    text = path.read_text(encoding="utf-8")
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        try:
+            import json5  # type: ignore
+        except ImportError as exc:
+            raise SystemExit(
+                "input uses JSON5 comments; install json5 or compile to strict JSON first"
+            ) from exc
+        return json5.loads(text)
 
 
 def emit_note_controllers(note_controllers: list[dict]) -> list[str]:
     lines = [
-        "-- Note lane overrides (data from original storyboard.json)",
+        "-- Note lane overrides",
         "local note_controllers = {",
     ]
     for nc in note_controllers:
-        items = ", ".join(f"{k} = {lua_value(v)}" for k, v in nc.items())
+        items = ", ".join(f"{lua_key(k)} = {lua_value(v)}" for k, v in nc.items())
         lines.append("  { " + items + " },")
     lines.extend(
         [
@@ -62,17 +106,24 @@ def emit_note_controllers(note_controllers: list[dict]) -> list[str]:
     return lines
 
 
-def emit_controller_states(states: list[dict], var_name: str) -> list[str]:
+def emit_controller_states(states: list[dict], var_name: str, root: dict | None = None) -> list[str]:
     lines = [f"local {var_name} = {{"]
     for st in states:
         items = []
         for k, v in st.items():
-            items.append(f"{k} = {lua_value(v)}")
+            items.append(f"{lua_key(k)} = {lua_value(v)}")
         lines.append("  { " + ", ".join(items) + " },")
     lines.extend(
         [
             "}",
-            f"local {var_name}_handle = sb.controller {{}}",
+        ]
+    )
+    if root:
+        lines.append(f"local {var_name}_handle = sb.controller {emit_lua_table(root)}")
+    else:
+        lines.append(f"local {var_name}_handle = sb.controller {{}}")
+    lines.extend(
+        [
             f"for _, kf in ipairs({var_name}) do",
             "  local patch = {}",
             "  for k, v in pairs(kf) do",
@@ -92,49 +143,25 @@ def emit_controller_states(states: list[dict], var_name: str) -> list[str]:
 
 
 def emit_inline_controller(obj: dict) -> list[str]:
-    return [f"sb.controller {fmt_inline_table(obj)}", ""]
+    return [f"sb.controller {emit_lua_table(obj)}", ""]
 
 
-def hoist_required_stage_field(kind: str, root: dict, states: list[dict]) -> dict:
-    required_keys = {
-        "sprite": ("path", "Path"),
-        "video": ("path", "Path"),
-        "text": ("text", "Text"),
-        "line": ("pos", "Pos"),
-    }.get(kind, ())
-    if not required_keys or any(key in root for key in required_keys):
-        return root
-
-    out = dict(root)
-    for state in states:
-        for key in required_keys:
-            if key in state:
-                out[key] = state[key]
-                return out
-    return out
+def emit_controller(ctrl: dict, index: int) -> list[str]:
+    states = ctrl.get("states") or ctrl.get("States") or []
+    root = {k: v for k, v in ctrl.items() if k not in ("states", "States")}
+    if not states:
+        return emit_inline_controller(root)
+    return [f"sb.controller {emit_lua_table(ctrl)}", ""]
 
 
-def emit_timeline_object(kind: str, obj: dict, index: int) -> list[str]:
-    states = obj.get("states") or obj.get("States") or []
-    root = {k: v for k, v in obj.items() if k not in ("states", "States")}
-    root = hoist_required_stage_field(kind, root, states)
-    var_name = f"{kind}_{index}"
-    lines = [f"local {var_name} = sb.{kind} {fmt_inline_table(root)}"]
-    for st in states:
-        if "add_time" in st or "AddTime" in st:
-            add = st.get("add_time", st.get("AddTime"))
-            patch = {
-                k: v
-                for k, v in st.items()
-                if k not in ("time", "Time", "add_time", "AddTime")
-            }
-            patch_s = fmt_inline_table(patch) if patch else "{}"
-            lines.append(f"{var_name}:rel({add}, {patch_s})")
-        else:
-            t = st.get("time", st.get("Time", 0))
-            patch = {k: v for k, v in st.items() if k not in ("time", "Time")}
-            patch_s = fmt_inline_table(patch) if patch else "{}"
-            lines.append(f"{var_name}:key({t}, {patch_s})")
+def emit_stage_object(kind: str, obj: dict) -> list[str]:
+    return [f"sb.{kind} {emit_lua_table(obj)}", ""]
+
+
+def emit_templates(templates: dict) -> list[str]:
+    lines = ["-- Templates"]
+    for name, spec in templates.items():
+        lines.append(f"sb.template({lua_string(name)}, {emit_lua_table(spec)})")
     lines.append("")
     return lines
 
@@ -142,14 +169,14 @@ def emit_timeline_object(kind: str, obj: dict, index: int) -> list[str]:
 def emit_triggers(triggers: list[dict]) -> list[str]:
     lines = []
     for trigger in triggers:
-        lines.append(f"sb.trigger {fmt_inline_table(trigger)}")
+        lines.append(f"sb.trigger {emit_lua_table(trigger)}")
     if lines:
         lines.append("")
     return lines
 
 
 def generate(json_path: Path, level_id: str) -> str:
-    doc = json.loads(json_path.read_text(encoding="utf-8"))
+    doc = load_doc(json_path)
     lines = [
         f"-- Recreates `{level_id}` storyboard from Lab cache.",
         f"-- Source: {json_path.name}",
@@ -159,24 +186,19 @@ def generate(json_path: Path, level_id: str) -> str:
         "",
     ]
 
-    if doc.get("note_controllers"):
-        lines.extend(emit_note_controllers(doc["note_controllers"]))
-
-    for ctrl in doc.get("controllers", []):
-        states = ctrl.get("states") or ctrl.get("States") or []
-        root = {k: v for k, v in ctrl.items() if k not in ("states", "States")}
-        if root and not states:
-            lines.extend(emit_inline_controller(root))
-        elif states:
-            name = f"ctrl_{len(lines)}"
-            lines.extend(emit_controller_states(states, name))
-        elif root:
-            lines.extend(emit_inline_controller(root))
+    if doc.get("templates"):
+        lines.extend(emit_templates(doc["templates"]))
 
     for kind in ("text", "video", "line", "sprite"):
         plural = kind + "s"
-        for index, obj in enumerate(doc.get(plural, [])):
-            lines.extend(emit_timeline_object(kind, obj, index))
+        for obj in doc.get(plural, []):
+            lines.extend(emit_stage_object(kind, obj))
+
+    for index, ctrl in enumerate(doc.get("controllers", [])):
+        lines.extend(emit_controller(ctrl, index))
+
+    if doc.get("note_controllers"):
+        lines.extend(emit_note_controllers(doc["note_controllers"]))
 
     if doc.get("triggers"):
         lines.extend(emit_triggers(doc["triggers"]))

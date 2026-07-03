@@ -97,6 +97,20 @@ impl StoryboardBuilder {
         self.doc.triggers.push(Value::Object(obj));
     }
 
+    pub fn set_template(&mut self, name: impl Into<String>, mut spec: Map<String, Value>) {
+        let templates = self.doc.templates.get_or_insert_with(Map::new);
+        let mut obj = Map::new();
+        let states = spec.remove("states").or_else(|| spec.remove("States"));
+        for (key, value) in spec {
+            obj.insert(normalize_root_key(self.format, &key), value);
+        }
+        obj.insert(
+            states_key(self.format),
+            states.unwrap_or_else(|| Value::Array(Vec::new())),
+        );
+        templates.insert(name.into(), Value::Object(obj));
+    }
+
     pub fn create_sprite_from_spec(
         &mut self,
         spec: Map<String, Value>,
